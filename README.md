@@ -24,7 +24,7 @@ The platform separates:
 
 ---
 
-# 🔄 End-to-End Data Flow
+#  End-to-End Data Flow
 
 ```text
                     ┌─────────────────────────────┐
@@ -92,7 +92,7 @@ The platform separates:
 
 ---
 
-# 📨 Event Flow
+# Event Flow
 
 ### 1. Ingestion
 
