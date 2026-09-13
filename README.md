@@ -1,239 +1,782 @@
-1. High-Level Architecture Overview
-This repository implements a multi-service, event-driven, real-time sports scoring, commentary generation, and live fanout system built for cricket matches. The architecture follows a microservice model where autonomous Go background daemons communicate asynchronously over NATS JetStream and Core NATS, with persistent storage split between Redis (for low-latency caching of current match state and match indices) and PostgreSQL (for append-only, idempotent historical ball-by-ball event persistence).
+#  Sports Live — Real-Time Cricket Scoring System
 
+A **multi-service, event-driven real-time cricket platform** built with Go.
 
-<img width="1223" height="1286" alt="image" src="https://github.com/user-attachments/assets/9107fe03-c27b-4ace-b48e-515089cc60e9" />
+The system processes ball-by-ball events, maintains live match state, generates automated commentary, persists historical data, and broadcasts real-time updates to connected web clients.
 
-2. End-to-End Data Flow
-->Ingestion Layer:
+---
 
-Ball delivery events enter the system via the ingestion service (cmd/ingestion/main.go) using a ticker-driven MockAdapter or directly via HTTP POST requests to /api/events on the Gateway.
-Events are published as JSON payloads to the NATS JetStream subject sports.events.normalized inside the EVENTS stream.
+##  Overview
 
-->Scoring Engine Processing:
-The scoring service listens on sports.events.normalized via a durable JetStream consumer named scoring.
-The raw BallDelivered event is passed to an in-memory state engine (Engine.Apply()).
-The engine computes cumulative team score (runs, wickets, overs, balls in over), updates individual striker and bowler statistics (runs scored, boundaries, overs bowled, runs conceded, wickets), handles strike rotation (swapping striker/non-striker on odd runs at the end of legal deliveries), and updates partnership statistics.
-The updated computed MatchState and enriched BallDelivered events are fanout published to NATS subjects sports.match.<ID>.state and sports.match.<ID>.ball.
-Simultaneously, scoring caches the latest MatchState snapshot in Redis key match:<ID>:state and executes an idempotent SQL INSERT INTO balls query in PostgreSQL.
+**Sports Live** follows a microservice architecture where independent Go services communicate asynchronously through **NATS JetStream and Core NATS**.
 
-->Commentary Generation:
+The platform separates:
 
-The commentary service listens on sports.match.<ID>.ball via a durable consumer named commentary.
-It formats the ball data using Line(ball) into natural language text (e.g., "0.1 Bumrah to Kohli, FOUR" or "0.4 Bumrah to Kohli, OUT caught").
-It publishes the formatted string wrapped inside a LineEvent payload to Core NATS on sports.commentary.<ID>.
+* **Real-time state** — Redis
+* **Persistent historical data** — PostgreSQL
+*  **Event streaming** — NATS JetStream
+*  **Commentary generation** — Dedicated commentary service
+*  **Client delivery** — REST API + WebSockets
 
+### High-Level Architecture
 
-->Gateway & Real-Time Broadcast:
-The gateway service maintains background Core NATS wild-card subscriptions to sports.match.*.> and sports.commentary.*.
-Incoming NATS messages are encapsulated in a standard { type, match_id, payload } WebSocket envelope.
-The Gateway's concurrent Hub broadcasts the message down active WebSocket channels to client connections subscribed to that specific match_id room (or the "all" global room).
-Web dashboards render live scoreboards, wagon-wheel indicators, and ball-by-ball commentary feeds in real time.
+<img width="1223" height="1286" alt="Sports Live Architecture" src="https://github.com/user-attachments/assets/9107fe03-c27b-4ace-b48e-515089cc60e9" />
 
-3. Core Technologies & Dependencies
-Language: Go 1.26.5 (net/http, context, sync, embed, time, os/signal).
-Message Broker / Streaming: NATS 2.11 with JetStream enabled (github.com/nats-io/nats.go, github.com/nats-io/nats.go/jetstream).
-In-Memory Store / Cache: Redis 7 (github.com/redis/go-redis/v9).
-Relational Database: PostgreSQL 16 (github.com/jackc/pgx/v5 with connection pooling via pgxpool).
-WebSockets: Gorilla WebSocket (github.com/gorilla/websocket).
-Containerization & Orchestration: Docker (Dockerfile multi-stage targets) and Docker Compose (docker-compose.yml).
-Development Automation: GNU Makefile and POSIX shell script (scripts/dev.sh).
+---
 
+# 🔄 End-to-End Data Flow
 
-4. Architectural Design Patterns & Principles
-->Event-Driven Architecture (EDA): Decoupled producer/consumer microservices connected exclusively via topic subjects over NATS JetStream.
-->Domain-Driven In-Memory State Machine: The scoring engine (internal/scoring/engine.go) is a pure Go state machine with zero direct IO side effects, simplifying unit testing (engine_test.go).
-->CQRS / Event Sourcing Hybrids: State transitions are triggered strictly by appending raw BallDelivered event records. Read models are served out of Redis snapshots or WebSocket feeds, while write operations append to Postgres.
-->Concurrent WebSocket Room Hub Pattern: Traditional Go channel-based hub (register, unregister, broadcast) coupled with decoupled readPump and writePump goroutines per WebSocket client connection.
-->Adapter Pattern for Ingestion: FeedAdapter interface decouples mock simulators from live data providers (e.g. external provider REST/WebSocket feeds).
-->Embedded Database Migrations: Uses Go //go:embed schema.sql to guarantee schema migrations automatically run upon service startup without external migration tool binaries.
+```text
+                    ┌─────────────────────────────┐
+                    │     Ingestion / Simulator   │
+                    │  Mock Feed / REST API       │
+                    └──────────────┬──────────────┘
+                                   │
+                                   │ sports.events.normalized
+                                   ▼
+                    ┌─────────────────────────────┐
+                    │       Scoring Engine        │
+                    │                             │
+                    │  • Cricket state machine    │
+                    │  • Score calculation        │
+                    │  • Player statistics        │
+                    │  • Strike rotation          │
+                    └───────┬───────────┬─────────┘
+                            │           │
+                 match.ball │           │ match.state
+                            ▼           ▼
+                 ┌──────────────┐   ┌──────────────┐
+                 │  Commentary  │   │    Redis     │
+                 │   Generator  │   │  Match State │
+                 └──────┬───────┘   └──────────────┘
+                        │
+                        │ sports.commentary.<id>
+                        ▼
+                 ┌─────────────────────────┐
+                 │ API Gateway + WebSocket │
+                 │          Hub            │
+                 └────────────┬────────────┘
+                              │
+                       WebSocket Fanout
+                              │
+                              ▼
+                 ┌─────────────────────────┐
+                 │   Frontend Dashboards   │
+                 │                         │
+                 │ index.html / admin.html │
+                 │       / view.html       │
+                 └─────────────────────────┘
 
+                     ┌────────────────┐
+                     │   PostgreSQL   │
+                     │                │
+                     │ Historical     │
+                     │ ball-by-ball   │
+                     │ persistence    │
+                     └────────────────┘
+```
 
-5. Main Services & Infrastructure Clients
-sports/
-├── cmd/                       # Service Entrypoints
-│   ├── ingestion/main.go      # Data feed simulator / ingest runner
-│   ├── scoring/main.go        # State machine processing engine
-│   ├── commentary/main.go     # Text template commentary engine
-│   └── gateway/main.go        # HTTP API + WS fanout server
-├── internal/                  # Internal Domain Logic & Services
-│   ├── commentary/            # Template generation and commentary service
-│   ├── events/                # Event schema definitions (NATS payload contracts)
-│   ├── gateway/               # WebSocket Hub, connection pumps, NATS router
-│   ├── ingestion/             # Ingestion interface, mock feed generator
-│   ├── models/                # Core domain state models (Match, Innings, Stats)
-│   └── scoring/               # Scoring state engine & NATS handler
-├── pkg/                       # Reusable Infrastructure Packages
-│   ├── db/                    # PostgreSQL pgx pool client & SQL schema
-│   ├── nats/                  # NATS & JetStream client wrapper & subject constants
-│   └── redis/                 # Redis Go-Redis client wrapper
-├── web/                       # Static Web Dashboard Frontend UIs
-│   ├── admin.html             # Administrative match manager & ball simulator
-│   ├── index.html             # Main match overview dashboard
-│   └── view.html              # Dedicated live score view page
-├── scripts/dev.sh             # Local multi-process development script
-├── docker-compose.yml         # Container topology definition
-├── Dockerfile                 # Multi-target Docker binary builder
-└── Makefile                   # Command shortcuts for run, build, test, dev
+---
 
-6. Detailed File-by-File Guide
-Entry Points (cmd/)
-cmd/ingestion/main.go
-Purpose: Entry point for the ingestion service.
-Key Functions / Types: main(), envOr().
-Behavior: Checks environment variable ENABLE_MOCK_FEED. If "true", initializes ingestion.NewMockAdapter(matchID) and runs ingestion.Service. If "false" (default in passive mode), it runs passively, allowing administrative API pushes to populate data.
-cmd/scoring/main.go
-Purpose: Entry point for the scoring engine daemon.
-Key Functions / Types: main(), envOr().
-Behavior: Connects to NATS, Redis, and PostgreSQL. Instantiates scoring.NewEngine() and starts scoring.Service.Run(). Operates as the central state calculator of the platform.
-cmd/commentary/main.go
-Purpose: Entry point for the real-time text commentary service.
-Key Functions / Types: main(), envOr().
-Behavior: Connects to NATS and executes commentary.Service.Run(), processing match ball streams into formatted commentary text events.
-cmd/gateway/main.go
-Purpose: API Gateway, WebSocket Hub, and static HTTP server entry point.
-Key Functions / Types: main(), HTTP Handlers (/ws, /, /api/matches, /api/events, /matches/*, /health).
-Behavior:
-Seeds match-001 metadata into Redis if index is empty.
-Starts concurrent gateway.Hub.
-Subscribes to NATS streams via gateway.Subscribe().
-Serves static Web UI files (index.html, admin.html).
-Implements REST endpoints to fetch match metadata, fetch match snapshot, or publish manual ball events directly to NATS.
-Internal Domain Logic (internal/)
-internal/models/models.go
-Purpose: Data structures for cricket match domain entities and state snapshots.
-Key Structures:
-Player, Team, Match: Match metadata entities.
-PlayerStats: Individual batting (runs, balls, 4s, 6s) and bowling stats (wickets, overs, runs conceded).
-Partnership: Current wicket partnership tracking.
-InningsState: Real-time state of an innings (total runs, wickets, overs, ball in over, current striker, non-striker, bowler, batters/bowlers maps).
-MatchState: High-level wrapper tracking overall match status and active innings state.
-internal/events/events.go
-Purpose: Event payload contracts transmitted across NATS subjects.
-Key Constants / Structures:
-Event type string constants (TypeMatchStarted, TypeBallDelivered, TypeOverCompleted, etc.).
-PlayerRef: Compact player reference (ID, Name).
-Extras: Granular breakdown of illegal/extra deliveries (Wides, NoBalls, Byes, LegByes).
-Wicket: Wicket metadata (Type, PlayerOut, Fielder).
-BallDelivered: Complete payload representing a single delivery event.
-OverCompleted: Event emitted upon completion of a 6-ball over.
-internal/ingestion/feed.go
-Purpose: Abstraction interface for event feeds.
-Key Interface: FeedAdapter (defines Connect(), ReadEvents(), Close()).
-internal/ingestion/mock.go
-Purpose: Mock implementation of FeedAdapter for automated match simulation.
-Key Functions / Types: MockAdapter, NewMockAdapter(), ReadEvents().
-Behavior: Runs a 3-second ticker loop generating synthetic BallDelivered events (incrementing balls and overs sequentially) and pushes them to a Go channel.
-internal/ingestion/service.go
-Purpose: Orchestrates reading from a FeedAdapter and publishing to NATS JetStream.
-Key Functions / Types: Service, NewService(), Run(), publish().
-Behavior: Spawns a reader goroutine that consumes events from FeedAdapter and publishes them to NATS subject sports.events.normalized.
+#  Core Services
+
+| Service              | Responsibility                                      |
+| -------------------- | --------------------------------------------------- |
+| **Ingestion**        | Receives or generates ball delivery events          |
+| **Scoring**          | Calculates and maintains the live cricket state     |
+| **Commentary**       | Converts ball events into human-readable commentary |
+| **Gateway**          | Provides REST APIs and WebSocket fanout             |
+| **Redis**            | Stores the latest match state for low-latency reads |
+| **PostgreSQL**       | Persists historical ball-by-ball events             |
+| **NATS / JetStream** | Provides asynchronous event streaming               |
+
+---
+
+# 📨 Event Flow
+
+### 1. Ingestion
+
+Ball delivery events enter the system through:
+
+* Mock simulator
+* REST API
+* Future external feed adapters
+
+The ingestion service publishes normalized events to:
+
+```text
+sports.events.normalized
+```
+
+inside the `EVENTS` JetStream stream.
+
+---
+
+### 2. Scoring Engine
+
+The scoring service consumes:
+
+```text
+sports.events.normalized
+```
+
+using a durable JetStream consumer named:
+
+```text
+scoring
+```
+
+Each `BallDelivered` event is passed to the in-memory scoring engine.
+
+The engine calculates:
+
+* Total runs
+* Wickets
+* Overs
+* Ball number
+* Extra runs
+* Batter statistics
+* Bowler statistics
+* Strike rotation
+* Partnership statistics
+
+The resulting events are published to:
+
+```text
+sports.match.<ID>.state
+sports.match.<ID>.ball
+```
+
+The scoring service also:
+
+1. Updates the latest match state in Redis
+2. Persists the raw ball event in PostgreSQL
+
+---
+
+### 3. Commentary Generator
+
+The commentary service consumes:
+
+```text
+sports.match.<ID>.ball
+```
+
+using a durable consumer named:
+
+```text
+commentary
+```
+
+It converts ball events into natural-language commentary.
+
+For example:
+
+```text
+0.1 Bumrah to Kohli, FOUR
+```
+
+or:
+
+```text
+0.4 Bumrah to Kohli, OUT caught
+```
+
+The generated commentary is published to:
+
+```text
+sports.commentary.<ID>
+```
+
+through Core NATS.
+
+---
+
+### 4. API Gateway & WebSocket Hub
+
+The gateway subscribes to:
+
+```text
+sports.match.*.>
+sports.commentary.*
+```
+
+Incoming NATS messages are wrapped in a standard WebSocket envelope:
+
+```json
+{
+  "type": "ball",
+  "match_id": "match-001",
+  "payload": {}
+}
+```
+
+The WebSocket Hub maintains rooms for individual matches.
+
+Connected clients receive real-time updates through WebSocket fanout.
+
+---
+
+# Data Storage
+
+## Redis
+
+Redis stores the latest match state for fast access.
+
+Example key:
+
+```text
+match:<id>:state
+```
+
+Match indexes are maintained using:
+
+```text
+matches:index
+```
+
+The match state has a **24-hour TTL**.
+
+Redis is primarily used for:
+
+* ⚡ Fast match-state reads
+* Current scoreboard data
+* Match indexing
+
+---
+
+## PostgreSQL
+
+PostgreSQL provides persistent historical storage.
+
+The main tables are:
+
+```text
+matches
+balls
+```
+
+The `balls` table stores:
+
+* Match ID
+* Innings ID
+* Over number
+* Ball number
+* Batsman
+* Bowler
+* Runs
+* Extras
+* Wicket information
+* Delivery type
+* Delivery timestamp
+
+Ball events are persisted using an idempotent insert:
+
+```sql
+ON CONFLICT (event_id) DO NOTHING
+```
+
+This prevents duplicate event persistence.
+
+---
+
+# NATS Architecture
+
+NATS is used as the communication backbone between services.
+
+### Important subjects
+
+```text
+sports.events.normalized
+sports.match.<ID>.state
+sports.match.<ID>.ball
+sports.commentary.<ID>
+```
+
+### JetStream Streams
+
+```text
+EVENTS
+MATCH_STATE
+MATCH_BALLS
+```
+
+JetStream provides durable event consumption and persistence for the important event-processing paths.
+
+Core NATS is used for lightweight real-time fanout, particularly for commentary and gateway subscriptions.
+
+---
+
+# 🏗️ Architecture Patterns
+
+## Event-Driven Architecture
+
+Services communicate asynchronously through NATS subjects rather than directly depending on each other.
+
+```text
+Producer → NATS → Consumer
+```
+
+This keeps the services loosely coupled.
+
+---
+
+## Domain-Driven State Machine
+
+The scoring engine is implemented as a pure Go state machine:
+
+```text
 internal/scoring/engine.go
-Purpose: Core in-memory state engine for cricket rule calculations.
-Key Functions / Types: Engine, NewEngine(), Apply(ball), isLegalDelivery(), extraRuns().
-Behavior:
-Computes total runs, extra runs, and legal ball count increments.
-Updates striker and bowler stats in st.Innings.Batters and st.Innings.Bowlers.
-Increments wickets and resets partnership on dismissals.
-Rotates strike between striker and non-striker on odd runs (1, 3, 5) off legal balls.
-internal/scoring/engine_test.go
-Purpose: Unit test suite for scoring.Engine.
-Key Tests: TestEngine_Apply() verifies cumulative score calculation, ball progression, and boundary tracking across consecutive deliveries.
-internal/scoring/service.go
-Purpose: Service coordinator connecting NATS JetStream, Redis, PostgreSQL, and Engine.
-Key Functions / Types: Service, NewService(), Run(), handle().
-Behavior:
-Creates JetStream streams EVENTS, MATCH_STATE, MATCH_BALLS.
-Creates durable consumer scoring on sports.events.normalized.
-On each message: runs engine.Apply(), publishes updated ball and state events to NATS JetStream, writes state snapshot to Redis, and saves raw ball event to Postgres.
-internal/commentary/templates.go
-Purpose: Natural language commentary line generator.
-Key Functions: Line(), wicketLine(), extraLine().
-Behavior: Matches ball properties (wickets, wide/no-ball extras, runs scored: 0, 1, 2, 3, FOUR, SIX) and produces human-readable strings like "0.1 Bumrah to Kohli, FOUR".
-internal/commentary/templates_test.go
-Purpose: Unit tests for commentary template generation logic.
-Key Tests: TestLine() checks string outputs for regular deliveries, fours, sixes, and wicket events.
-internal/commentary/service.go
-Purpose: JetStream consumer for match balls that generates and broadcasts text commentary.
-Key Functions / Types: Service, NewService(), Run(), handle().
-Behavior: Subscribes to sports.match.*.ball via JetStream consumer commentary, generates commentary string via Line(ball), and publishes LineEvent to Core NATS topic sports.commentary.<match_id>.
-internal/gateway/hub.go
-Purpose: Thread-safe WebSocket client manager and room broadcaster.
-Key Functions / Types: Client, Hub, NewHub(), Run(), Broadcast(), Register(), Unregister().
-Behavior: Maintains a nested map of rooms map[matchID]map[*Client]struct{} protected by sync.RWMutex. Handles concurrent client registrations, unregistrations, and channel message pushes to specific match rooms and global "all" rooms.
-internal/gateway/ws.go
-Purpose: Upgrades HTTP connections to WebSockets and handles network IO.
-Key Functions: ServeWS(), readPump(), writePump().
-Behavior: Sets up Gorilla WebSocket upgrader, registers clients to Hub based on match_id query param, handles ping/pong keepalives, and flushes messages to network sockets.
-internal/gateway/subscriber.go
-Purpose: Bridges NATS pub/sub messages into the gateway Hub.
-Key Functions: Subscribe(), parseSubject(), splitSubject().
-Behavior: Sets up Core NATS subscriptions for sports.match.*.> and sports.commentary.*, parses match IDs from subjects, wraps payloads in an Envelope, and routes them to hub.Broadcast().
-Infrastructure Packages (pkg/)
-pkg/nats/client.go
-Purpose: NATS and JetStream client initialization wrapper and subject routing helpers.
-Key Constants: Subject definitions (SubjectRaw, SubjectNormalized, SubjectMatchState, SubjectMatchBall, SubjectCommentary, SubjectFanout).
-Key Functions: Connect(), MatchBallSubject(), MatchStateSubject(), CommentarySubject(), FanoutSubject().
-pkg/redis/client.go
-Purpose: Redis client wrapper for match state caching and indexing.
-Key Functions: Connect(), SetMatchState(), GetMatchState(), SaveMatch(), GetMatches().
-Behavior: Uses Redis string key match:<id>:state with a 24-hour TTL and a Redis Set matches:index to track active match IDs.
-pkg/db/schema.sql
-Purpose: Relational schema DDL for PostgreSQL database.
-Tables:
-matches (id, status, created_at).
-balls (id, event_id UNIQUE, match_id, innings_id, over_number, ball_in_over, batsman_id, batsman_name, bowler_id, bowler_name, runs_scored, extras_*, wicket_type, player_out_id, delivery_type, delivered_at).
-Indexes: balls_match_idx on (match_id, delivered_at).
-pkg/db/client.go
-Purpose: PostgreSQL connection pool client and query executor.
-Key Functions: Connect(), migrate(), EnsureMatch(), InsertBall().
-Behavior: Uses //go:embed schema.sql to execute DDL automatically on connection. Performs idempotent inserts into balls using ON CONFLICT (event_id) DO NOTHING.
-Web Frontend (web/)
-web/index.html
-Purpose: Primary real-time match dashboard.
-Features: Live score banner, overs progress, live commentary timeline, scorecard table, wagon wheel visualizer, and WebSocket connection state indicator.
-web/admin.html
-Purpose: Operator administration panel and simulator console.
-Features: Form interface to manually submit custom ball deliveries (runs, extra types, wicket types, player names) to /api/events, create new matches, and toggle auto-simulation feeds.
-web/view.html
-Purpose: Minimal clean scoreboard UI meant for embedding or standalone viewing.
-Operations & Configuration
-docker-compose.yml
-Services: nats (alpine with JetStream -js enabled), redis (7-alpine), postgres (16-alpine with healthcheck), scoring, commentary, gateway, ingestion.
-Networks & Ports: Maps NATS 4222/8222, Redis 6379, Postgres 5432, Gateway 8080.
-Dockerfile
-Structure: Multi-stage Go build (golang:1.26-alpine build stage producing small static alpine binaries targeting specific binary build args SERVICE).
-Makefile
-Targets: nats, ingestion, scoring, commentary, gateway, dev, up, down, logs, test, build.
-scripts/dev.sh
-Purpose: Launches infrastructure dependencies in Docker (nats, redis, postgres) and starts all 4 Go services in parallel in a single terminal session with trap handlers to gracefully kill background processes on SIGINT/Ctrl+C.
+```
 
+The engine performs cricket-rule calculations without direct I/O side effects.
 
+This makes the core scoring logic easier to test independently.
 
-7. Setup & Execution Guide
-Prerequisite Infrastructure
-Ensure Docker and Go 1.26+ are installed on your host system.
+---
 
-Running with Docker Compose (Full Stack)
-# Build images and launch all services in detached mode
+## CQRS / Event-Sourcing Hybrid
+
+State transitions are driven by `BallDelivered` events.
+
+```text
+BallDelivered Event
+       │
+       ▼
+Scoring Engine
+       │
+       ├──► Redis → Current State
+       │
+       ├──► PostgreSQL → Historical Events
+       │
+       └──► NATS → Real-Time Consumers
+```
+
+Read models are served from Redis snapshots and real-time WebSocket feeds, while historical writes are persisted to PostgreSQL.
+
+---
+
+## WebSocket Room Hub
+
+The gateway uses a concurrent room-based WebSocket Hub.
+
+```text
+Hub
+ ├── match-001
+ │    ├── Client A
+ │    └── Client B
+ │
+ ├── match-002
+ │    └── Client C
+ │
+ └── all
+      └── Global Clients
+```
+
+Each connection uses separate `readPump` and `writePump` goroutines.
+
+---
+
+## Adapter Pattern
+
+Ingestion is abstracted behind:
+
+```go
+type FeedAdapter interface {
+    Connect()
+    ReadEvents()
+    Close()
+}
+```
+
+This allows the mock feed to be replaced by a real external provider later.
+
+---
+
+# 📁 Project Structure
+
+```text
+sports/
+│
+├── cmd/                              # Service entrypoints
+│   ├── ingestion/
+│   │   └── main.go                  # Data feed simulator / ingest runner
+│   ├── scoring/
+│   │   └── main.go                  # State machine processing engine
+│   ├── commentary/
+│   │   └── main.go                  # Text commentary engine
+│   └── gateway/
+│       └── main.go                  # HTTP API + WebSocket server
+│
+├── internal/                         # Domain logic & services
+│   ├── commentary/                   # Commentary generation
+│   ├── events/                       # NATS event contracts
+│   ├── gateway/                      # WebSocket Hub + NATS router
+│   ├── ingestion/                    # Feed abstraction + mock feed
+│   ├── models/                       # Match / innings / statistics
+│   └── scoring/                      # Scoring state engine
+│
+├── pkg/                              # Reusable infrastructure
+│   ├── db/                           # PostgreSQL client + schema
+│   ├── nats/                         # NATS / JetStream wrapper
+│   └── redis/                        # Redis client wrapper
+│
+├── web/                              # Static frontend
+│   ├── admin.html                    # Admin & ball simulator
+│   ├── index.html                    # Main dashboard
+│   └── view.html                     # Dedicated live score view
+│
+├── scripts/
+│   └── dev.sh                        # Local multi-process development
+│
+├── docker-compose.yml                # Container topology
+├── Dockerfile                        # Multi-stage Go build
+└── Makefile                          # Development commands
+```
+
+---
+
+# 🔍 Important Files
+
+### `cmd/ingestion/main.go`
+
+Entry point for the ingestion service.
+
+It checks:
+
+```text
+ENABLE_MOCK_FEED
+```
+
+When enabled, the service starts the mock feed simulator.
+
+---
+
+### `cmd/scoring/main.go`
+
+Starts the scoring engine and connects it to:
+
+* NATS
+* Redis
+* PostgreSQL
+
+It creates the scoring service and starts event processing.
+
+---
+
+### `internal/scoring/engine.go`
+
+The core cricket state machine.
+
+Responsible for:
+
+```text
+Runs
+Wickets
+Overs
+Balls
+Extras
+Batting statistics
+Bowling statistics
+Strike rotation
+Partnerships
+```
+
+---
+
+### `internal/scoring/service.go`
+
+Connects the scoring engine with infrastructure.
+
+For each event it:
+
+```text
+NATS Event
+    ↓
+Engine.Apply()
+    ↓
+Updated MatchState
+    ├──► NATS
+    ├──► Redis
+    └──► PostgreSQL
+```
+
+---
+
+### `internal/commentary/templates.go`
+
+Contains the logic that converts ball data into human-readable commentary.
+
+Examples include:
+
+```text
+FOUR
+SIX
+WICKET
+WIDE
+NO-BALL
+NORMAL DELIVERY
+```
+
+---
+
+### `internal/gateway/hub.go`
+
+Maintains WebSocket clients and match rooms.
+
+It provides:
+
+```go
+Register()
+Unregister()
+Broadcast()
+Run()
+```
+
+The room structure is conceptually:
+
+```go
+map[matchID]map[*Client]struct{}
+```
+
+---
+
+### `internal/gateway/subscriber.go`
+
+Bridges NATS messages into the WebSocket Hub.
+
+It:
+
+1. Subscribes to NATS
+2. Parses the subject
+3. Extracts the match ID
+4. Wraps the message in an envelope
+5. Broadcasts it to the appropriate room
+
+---
+
+# 🖥️ Frontend
+
+The project contains three static web interfaces.
+
+### `index.html`
+
+Main match dashboard featuring:
+
+* Live score
+* Overs progress
+* Commentary timeline
+* Scorecard
+* Wagon wheel
+* WebSocket connection status
+
+### `admin.html`
+
+Administrative control panel for:
+
+* Creating matches
+* Submitting ball deliveries
+* Selecting runs
+* Adding extras
+* Adding wickets
+* Starting/stopping simulation
+
+### `view.html`
+
+Minimal live scoreboard designed for standalone or embedded viewing.
+
+---
+
+#  Tech Stack
+
+| Category         | Technology             |
+| ---------------- | ---------------------- |
+| Language         | Go 1.26.5              |
+| Message Broker   | NATS 2.11              |
+| Streaming        | NATS JetStream         |
+| Cache            | Redis 7                |
+| Database         | PostgreSQL 16          |
+| WebSockets       | Gorilla WebSocket      |
+| Database Driver  | pgx / pgxpool          |
+| Redis Client     | go-redis/v9            |
+| Containerization | Docker                 |
+| Orchestration    | Docker Compose         |
+| Automation       | GNU Make + POSIX Shell |
+| Frontend         | HTML / JavaScript      |
+
+---
+
+# Getting Started
+
+## Prerequisites
+
+Install:
+
+* Docker
+* Go 1.26+
+
+---
+
+## Run the Full Stack
+
+Build and start all services:
+
+```bash
 make up
+```
 
-# View consolidated live service logs
+View logs:
+
+```bash
 make logs
+```
 
-# Tear down container stack
+Stop the stack:
+
+```bash
 make down
+```
 
+---
 
-Local Hybrid Development (Containers + Local Go Services)
-# Start NATS, Redis, and Postgres containers in background, then run Go services locally
+## Local Development
+
+Run NATS, Redis, and PostgreSQL in Docker while running the Go services locally:
+
+```bash
 make dev
+```
 
+---
 
-Access Main Dashboard: http://localhost:8080/
-Access Admin / Simulator: http://localhost:8080/admin
-Health Check: http://localhost:8080/health
+# Access the Application
 
-Running Tests
+Main dashboard:
+
+```text
+http://localhost:8080/
+```
+
+Admin / simulator:
+
+```text
+http://localhost:8080/admin
+```
+
+Dedicated live view:
+
+```text
+http://localhost:8080/view
+```
+
+---
+
+# Docker Services
+
+Docker Compose runs:
+
+```text
+NATS
+Redis
+PostgreSQL
+Scoring
+Commentary
+Gateway
+Ingestion
+```
+
+Default infrastructure ports:
+
+| Service         |   Port |
+| --------------- | -----: |
+| Gateway         | `8080` |
+| NATS            | `4222` |
+| NATS Monitoring | `8222` |
+| Redis           | `6379` |
+| PostgreSQL      | `5432` |
+
+---
+
+#  Testing
+
+The scoring engine contains unit tests covering:
+
+* Cumulative score calculation
+* Ball progression
+* Boundary tracking
+* Consecutive deliveries
+
+Run tests with:
+
+```bash
 make test
+```
 
+---
+
+# Development Commands
+
+The Makefile provides shortcuts for:
+
+```text
+make nats
+make ingestion
+make scoring
+make commentary
+make gateway
+make dev
+make up
+make down
+make logs
+make test
+make build
+```
+
+---
+
+# 📌 Design Goals
+
+The system is designed around:
+
+* ⚡ Low-latency live match updates
+* 📨 Asynchronous event processing
+* 🔌 Loosely coupled services
+* 💾 Persistent ball-by-ball history
+* 📊 Fast access to current match state
+* 🌐 Real-time WebSocket fanout
+* 🧪 Testable domain logic
+* 🐳 Reproducible containerized deployment
+* 🔄 Extensible ingestion adapters
+
+---
+
+# 🔮 Future Extensions
+
+The ingestion adapter architecture makes it possible to replace the mock feed with:
+
+```text
+External REST Feed
+       │
+       ▼
+FeedAdapter
+       │
+       ▼
+NATS
+       │
+       ▼
+Scoring Engine
+```
+
+This allows the same scoring pipeline to process real external cricket data without changing the core scoring engine.
+
+---
+
+---
+
+<div align="center">
+
+### Sports Live
+
+**Real-time scoring • Event streaming • Live commentary • WebSocket fanout**
+
+</div>
