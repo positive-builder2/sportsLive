@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sports Admin & Load Console</title>
+    <style>
+        :root {
+            --bg-dark: #0b0f19;
+            --card-bg: #151c2c;
+            --accent: #38bdf8;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #1e293b;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-dark); color: var(--text-main); margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+
+        header { display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); padding: 18px 24px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 24px; }
+        h1 { margin: 0; font-size: 1.5em; color: var(--accent); }
+        .nav-links a { color: var(--text-muted); text-decoration: none; font-weight: 600; padding: 8px 14px; border-radius: 6px; background: #0f172a; }
+        .nav-links a:hover { color: #fff; }
+
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        .panel { background: var(--card-bg); padding: 24px; border-radius: 14px; border: 1px solid var(--border); margin-bottom: 24px; }
+        .panel h2 { margin-top: 0; color: var(--accent); font-size: 1.25em; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+
+        label { display: block; margin-top: 12px; font-weight: 600; font-size: 0.85em; color: var(--text-muted); text-transform: uppercase; }
+        input, select { width: 100%; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1px solid var(--border); background: #0f172a; color: #fff; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; margin-top: 18px; border: none; border-radius: 6px; background: #0284c7; color: white; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #0369a1; }
+        button.stop { background: var(--accent-red); }
+        button.stop:hover { background: #dc2626; }
+
+        .metric-box { background: #0f172a; padding: 16px; border-radius: 8px; margin-top: 16px; font-family: monospace; font-size: 0.95em; }
+        .status-msg { margin-top: 12px; padding: 10px; border-radius: 6px; display: none; font-size: 0.85em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ Sports Admin & Benchmark Console</h1>
+            <div class="nav-links">
+                <a href="/index.html">Live Dashboard</a>
+                <a href="/admin.html" style="color: var(--accent);">Admin Console</a>
+            </div>
+        </header>
+
+        <div class="grid-2">
+            <!-- Panel 1: Create Match -->
+            <div class="panel">
+                <h2>➕ Register New Match</h2>
+                <form id="createMatchForm">
+                    <label for="newMatchId">Match ID</label>
+                    <input type="text" id="newMatchId" value="match-002" required>
+
+                    <label for="teamA">Team A</label>
+                    <input type="text" id="teamA" value="England" required>
+
+                    <label for="teamB">Team B</label>
+                    <input type="text" id="teamB" value="South Africa" required>
+
+                    <label for="venue">Venue</label>
+                    <input type="text" id="venue" value="Lords, London" required>
+
+                    <label for="format">Format</label>
+                    <select id="format">
+                        <option value="T20">T20 International</option>
+                        <option value="ODI">ODI</option>
+                        <option value="TEST">Test Match</option>
+                    </select>
+
+                    <button type="submit">Create & Register Match</button>
+                </form>
+                <div id="matchStatus" class="status-msg"></div>
+            </div>
+
+            <!-- Panel 2: Manual Ball Trigger -->
+            <div class="panel">
+                <h2>🏏 Single Ball Event</h2>
+                <form id="singleBallForm">
+                    <label for="targetMatch">Target Match ID</label>
+                    <input type="text" id="targetMatch" value="match-001" required>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div>
+                            <label for="batsman">Batsman</label>
+                            <select id="batsman">
+                                <option value="p1" selected>Kohli</option>
+                                <option value="p2">Rohit</option>
+                                <option value="p3">Rahul</option>
+                                <option value="p4">Pant</option>
+                                <option value="p5">Gill</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="bowler">Bowler</label>
+                            <select id="bowler">
+                                <option value="b1" selected>Bumrah</option>
+                                <option value="b2">Shami</option>
+                                <option value="b3">Bhuvi</option>
+                                <option value="b4">Siraj</option>
+                                <option value="b5">Ashwin</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
+                        <div>
+                            <label for="runs">Runs</label>
+                            <select id="runs">
+                                <option value="0">0</option>
+                                <option value="1" selected>1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                                <option value="4">4 (FOUR)</option>
+                                <option value="6">6 (SIX)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="extra">Extra</label>
+                            <select id="extra">
+                                <option value="none">None</option>
+                                <option value="wide">Wide (+1)</option>
+                                <option value="no_ball">No Ball (+1)</option>
+                                <option value="bye">Bye</option>
+                                <option value="leg_bye">Leg Bye</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="wicket">Wicket</label>
+                            <select id="wicket">
+                                <option value="none">None</option>
+                                <option value="bowled">Bowled</option>
+                                <option value="caught">Caught</option>
+                                <option value="lbw">LBW</option>
+                                <option value="run_out">Run Out</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="submit">Publish Single Ball</button>
+                </form>
+                <div id="ballStatus" class="status-msg"></div>
+            </div>
+        </div>
+
+        <!-- Panel 3: Benchmark & Load Simulator -->
+        <div class="panel">
+            <h2>🚀 High-Throughput Load Simulator (Benchmark Test)</h2>
+            <p style="color: var(--text-muted); font-size: 0.9em;">Simulate real-time streaming load by sending high-frequency ball events into NATS to test processing throughput & client WebSocket latency.</p>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+                <div>
+                    <label for="simMatch">Match ID</label>
+                    <input type="text" id="simMatch" value="match-001">
+                </div>
+                <div>
+                    <label for="simBatsman">Batsman</label>
+                    <select id="simBatsman">
+                        <option value="p1" selected>Kohli</option>
+                        <option value="p2">Rohit</option>
+                        <option value="p3">Rahul</option>
+                        <option value="p4">Pant</option>
+                        <option value="p5">Gill</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="simBowler">Bowler</label>
+                    <select id="simBowler">
+                        <option value="b1" selected>Bumrah</option>
+                        <option value="b2">Shami</option>
+                        <option value="b3">Bhuvi</option>
+                        <option value="b4">Siraj</option>
+                        <option value="b5">Ashwin</option>
+                    </select>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px;">
+                <div>
+                    <label for="eventsPerSec">Events / Sec</label>
+                    <input type="number" id="eventsPerSec" value="10" min="1" max="500">
+                </div>
+                <div>
+                    <label for="simDuration">Duration (Sec)</label>
+                    <input type="number" id="simDuration" value="30" min="5" max="300">
+                </div>
+            </div>
+
+            <button id="simBtn" onclick="toggleSimulation()">▶ Start Benchmark Load Stream</button>
+
+            <div class="metric-box">
+                <div>Status: <strong id="simState" style="color: var(--accent-green);">Idle</strong></div>
+                <div>Events Dispatched: <strong id="simCount">0</strong></div>
+                <div>Target Rate: <strong id="simRate">0 ev/sec</strong></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const PLAYERS = [
+            { id: 'p1', name: 'Kohli' },
+            { id: 'p2', name: 'Rohit' },
+            { id: 'p3', name: 'Rahul' },
+            { id: 'p4', name: 'Pant' },
+            { id: 'p5', name: 'Gill' },
+            { id: 'b1', name: 'Bumrah' },
+            { id: 'b2', name: 'Shami' },
+            { id: 'b3', name: 'Bhuvi' },
+            { id: 'b4', name: 'Siraj' },
+            { id: 'b5', name: 'Ashwin' }
+        ];
+
+        function fillPlayerSelect(el, selected) {
+            el.innerHTML = PLAYERS.map(p =>
+                `<option value="${p.id}" ${p.name === selected ? 'selected' : ''}>${p.name}</option>`
+            ).join('');
+        }
+
+        fillPlayerSelect(document.getElementById('batsman'), 'Kohli');
+        fillPlayerSelect(document.getElementById('bowler'), 'Bumrah');
+        fillPlayerSelect(document.getElementById('simBatsman'), 'Kohli');
+        fillPlayerSelect(document.getElementById('simBowler'), 'Bumrah');
+
+        function selectedPlayer(selectId) {
+            const el = document.getElementById(selectId);
+            const p = PLAYERS.find(x => x.id === el.value);
+            return p || { id: el.value, name: el.options[el.selectedIndex].text };
+        }
+
+        // Form 1: Create Match
+        document.getElementById('createMatchForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const msg = document.getElementById('matchStatus');
+            const payload = {
+                id: document.getElementById('newMatchId').value,
+                team_a: { name: document.getElementById('teamA').value },
+                team_b: { name: document.getElementById('teamB').value },
+                venue: document.getElementById('venue').value,
+                format: document.getElementById('format').value,
+                status: 'live'
+            };
+
+            try {
+                const res = await fetch('/api/matches', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    msg.style.display = 'block';
+                    msg.style.background = '#065f46';
+                    msg.textContent = '✅ Match successfully created and indexed!';
+                }
+            } catch (err) {
+                msg.style.display = 'block';
+                msg.style.background = '#991b1b';
+                msg.textContent = '❌ Failed: ' + err.message;
+            }
+        });
+
+        // Form 2: Single Ball Delivery
+        document.getElementById('singleBallForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const matchID = document.getElementById('targetMatch').value;
+            const batsman = selectedPlayer('batsman');
+            const bowler = selectedPlayer('bowler');
+            const runs = parseInt(document.getElementById('runs').value);
+            const extraVal = document.getElementById('extra').value;
+            const wVal = document.getElementById('wicket').value;
+
+            const extrasObj = { wides: 0, no_balls: 0, byes: 0, leg_byes: 0 };
+            if (extraVal === 'wide') extrasObj.wides = 1;
+            if (extraVal === 'no_ball') extrasObj.no_balls = 1;
+            if (extraVal === 'bye') extrasObj.byes = 1;
+            if (extraVal === 'leg_bye') extrasObj.leg_byes = 1;
+
+            const ball = {
+                event_id: Date.now().toString(),
+                event_type: "ball.delivered",
+                match_id: matchID,
+                innings_id: "inn1",
+                batsman: { id: batsman.id, name: batsman.name },
+                bowler: { id: bowler.id, name: bowler.name },
+                runs_scored: runs,
+                extras: extrasObj,
+                timestamp: new Date().toISOString()
+            };
+            if (wVal !== 'none') {
+                ball.wicket = { type: wVal, player_out: { id: batsman.id, name: batsman.name } };
+            }
+
+            const res = await fetch('/api/events', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(ball)
+            });
+            const bMsg = document.getElementById('ballStatus');
+            bMsg.style.display = 'block';
+            bMsg.style.background = res.ok ? '#065f46' : '#991b1b';
+            bMsg.textContent = res.ok ? '✅ Event published!' : '❌ Publish error';
+        });
+
+        // Load Simulator
+        let simInterval = null;
+        let eventCounter = 0;
+
+        function toggleSimulation() {
+            if (simInterval) {
+                stopSimulation();
+            } else {
+                startSimulation();
+            }
+        }
+
+        function startSimulation() {
+            const matchID = document.getElementById('simMatch').value;
+            const batsman = selectedPlayer('simBatsman');
+            const bowler = selectedPlayer('simBowler');
+            const rate = parseInt(document.getElementById('eventsPerSec').value) || 10;
+            const duration = parseInt(document.getElementById('simDuration').value) || 30;
+
+            const btn = document.getElementById('simBtn');
+            btn.textContent = '⏹ Stop Load Stream';
+            btn.classList.add('stop');
+            document.getElementById('simState').textContent = 'RUNNING';
+            document.getElementById('simRate').textContent = `${rate} ev/sec`;
+
+            eventCounter = 0;
+            const intervalMs = Math.floor(1000 / rate);
+            const endTime = Date.now() + (duration * 1000);
+
+            simInterval = setInterval(async () => {
+                if (Date.now() >= endTime) {
+                    stopSimulation();
+                    return;
+                }
+
+                const runsArr = [0, 1, 1, 2, 4, 6];
+                const runs = runsArr[Math.floor(Math.random() * runsArr.length)];
+                const ball = {
+                    event_id: `sim-${Date.now()}-${eventCounter}`,
+                    event_type: "ball.delivered",
+                    match_id: matchID,
+                    innings_id: "inn1",
+                    batsman: { id: batsman.id, name: batsman.name },
+                    bowler: { id: bowler.id, name: bowler.name },
+                    runs_scored: runs,
+                    extras: { wides: 0, no_balls: 0, byes: 0, leg_byes: 0 },
+                    timestamp: new Date().toISOString()
+                };
+
+                fetch('/api/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(ball)
+                }).catch(() => {});
+
+                eventCounter++;
+                document.getElementById('simCount').textContent = eventCounter;
+            }, intervalMs);
+        }
+
+        function stopSimulation() {
+            if (simInterval) {
+                clearInterval(simInterval);
+                simInterval = null;
+            }
+            const btn = document.getElementById('simBtn');
+            btn.textContent = '▶ Start Benchmark Load Stream';
+            btn.classList.remove('stop');
+            document.getElementById('simState').textContent = 'Completed';
+        }
+    </script>
+</body>
+</html>

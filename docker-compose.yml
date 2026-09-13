@@ -1,0 +1,89 @@
+services:
+  nats:
+    image: nats:2.11-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sports
+      POSTGRES_PASSWORD: sports
+      POSTGRES_DB: sports
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sports"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  scoring:
+    build:
+      context: .
+      args:
+        SERVICE: scoring
+    depends_on:
+      nats:
+        condition: service_started
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      NATS_URL: nats://nats:4222
+      REDIS_ADDR: redis:6379
+      DATABASE_URL: postgres://sports:sports@postgres:5432/sports?sslmode=disable
+
+  commentary:
+    build:
+      context: .
+      args:
+        SERVICE: commentary
+    depends_on:
+      nats:
+        condition: service_started
+    environment:
+      NATS_URL: nats://nats:4222
+
+  gateway:
+    build:
+      context: .
+      args:
+        SERVICE: gateway
+    depends_on:
+      nats:
+        condition: service_started
+      redis:
+        condition: service_started
+    environment:
+      NATS_URL: nats://nats:4222
+      REDIS_ADDR: redis:6379
+      GATEWAY_ADDR: ":8080"
+    ports:
+      - "8080:8080"
+
+  ingestion:
+    build:
+      context: .
+      args:
+        SERVICE: ingestion
+    depends_on:
+      scoring:
+        condition: service_started
+    environment:
+      NATS_URL: nats://nats:4222
+      MATCH_ID: match-001
+      ENABLE_MOCK_FEED: "false"
+
+volumes:
+  pgdata:

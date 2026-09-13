@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Cricket Center</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #090d16; color: #f8fafc; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; background: #1e293b; padding: 16px 24px; border-radius: 12px; margin-bottom: 20px; }
+        .badge { background: #22c55e; color: #052e16; font-weight: bold; padding: 4px 10px; border-radius: 12px; font-size: 0.85em; text-transform: uppercase; }
+        .badge.off { background: #ef4444; color: #450a0a; }
+        
+        .score-card { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); padding: 32px; border-radius: 16px; border: 1px solid #334155; margin-bottom: 24px; text-align: center; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
+        .score-main { font-size: 3.5em; font-weight: 800; color: #38bdf8; margin: 10px 0; }
+        .score-meta { color: #94a3b8; font-size: 1.1em; }
+        
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        .stat-box { background: #1e293b; padding: 16px; border-radius: 10px; border-left: 4px solid #0284c7; }
+        .stat-box h4 { margin: 0 0 6px 0; color: #94a3b8; font-size: 0.85em; text-transform: uppercase; }
+        .stat-box p { margin: 0; font-size: 1.2em; font-weight: 600; }
+        
+        .commentary-box { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; }
+        .commentary-box h3 { margin-top: 0; color: #38bdf8; border-bottom: 1px solid #334155; padding-bottom: 10px; }
+        .comm-item { padding: 12px 0; border-bottom: 1px solid #334155; font-size: 1em; line-height: 1.5; animation: fadeIn 0.4s ease; }
+        .comm-item:last-child { border-bottom: none; }
+        .comm-time { font-size: 0.8em; color: #64748b; margin-top: 4px; }
+        
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h2 style="margin: 0;">🏏 Sports Live Scoreboard</h2>
+                <small style="color: #94a3b8;">Match: <strong id="matchIdLabel">match-001</strong></small>
+            </div>
+            <span id="statusBadge" class="badge off">Connecting...</span>
+        </div>
+
+        <div class="score-card">
+            <div class="score-meta">INDIA vs AUSTRALIA</div>
+            <div class="score-main" id="scoreDisplay">0/0</div>
+            <div class="score-meta" id="oversDisplay">Overs: 0.0</div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <h4>Striker</h4>
+                <p id="strikerDisplay">-</p>
+            </div>
+            <div class="stat-box">
+                <h4>Bowler</h4>
+                <p id="bowlerDisplay">-</p>
+            </div>
+        </div>
+
+        <div class="commentary-box">
+            <h3>Ball-by-Ball Commentary</h3>
+            <div id="commentaryList">
+                <div style="color: #64748b; text-align: center; padding: 20px;">Waiting for live match stream...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const matchID = new URLSearchParams(window.location.search).get('match_id') || 'match-001';
+        document.getElementById('matchIdLabel').textContent = matchID;
+
+        // Fetch initial snapshot from Redis REST API
+        async function loadSnapshot() {
+            try {
+                const res = await fetch(`/matches/${matchID}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    updateScore(data);
+                }
+            } catch (err) {
+                console.log("Snapshot not found or server starting", err);
+            }
+        }
+        loadSnapshot();
+
+        // Connect to WebSocket Gateway
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws?match_id=${matchID}`;
+        const socket = new WebSocket(wsUrl);
+        const badge = document.getElementById('statusBadge');
+
+        socket.onopen = () => {
+            badge.textContent = 'LIVE';
+            badge.classList.remove('off');
+        };
+
+        socket.onclose = () => {
+            badge.textContent = 'DISCONNECTED';
+            badge.classList.add('off');
+        };
+
+        const commList = document.getElementById('commentaryList');
+        let firstComm = true;
+
+        socket.onmessage = (event) => {
+            try {
+                const env = JSON.parse(event.data);
+                if (!env.payload) return;
+
+                if (env.type === 'state') {
+                    updateScore(env.payload);
+                } else if (env.type === 'commentary') {
+                    if (firstComm) {
+                        commList.innerHTML = '';
+                        firstComm = false;
+                    }
+                    const item = document.createElement('div');
+                    item.className = 'comm-item';
+                    item.innerHTML = `<div>${env.payload.text}</div><div class="comm-time">${new Date(env.payload.timestamp).toLocaleTimeString()}</div>`;
+                    commList.insertBefore(item, commList.firstChild);
+                }
+            } catch (e) {
+                console.error("WS Parse error", e);
+            }
+        };
+
+        function updateScore(state) {
+            if (!state || !state.innings) return;
+            const inn = state.innings;
+            document.getElementById('scoreDisplay').textContent = `${inn.runs}/${inn.wickets}`;
+            document.getElementById('oversDisplay').textContent = `Overs: ${inn.overs}.${inn.ball_in_over}`;
+            document.getElementById('strikerDisplay').textContent = inn.striker ? inn.striker.name : '-';
+            document.getElementById('bowlerDisplay').textContent = inn.bowler ? inn.bowler.name : '-';
+        }
+    </script>
+</body>
+</html>
